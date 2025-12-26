@@ -12,3 +12,7 @@ create TABLE [dbo].[netflix_raw](
 	[listed_in] [varchar](100) NULL,
 	[description] [varchar](500) NULL
 ) 
+
+
+
+drop TABLE [dbo].[netflix_raw]

@@ -1,13 +1,75 @@
+select * from dbo.netflix_raw;
+
+ALTER TABLE netflix_raw
+ALTER COLUMN title NVARCHAR(200);
+
+
+ALTER TABLE netflix_raw
+ALTER COLUMN show_id VARCHAR(10) NOT NULL;
+
+
+ALTER TABLE netflix_raw
+ADD CONSTRAINT PK_netflix_raw PRIMARY KEY (show_id);
+
+SELECT COLUMN_NAME, DATA_TYPE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'netflix_raw';
+
 select * from netflix_raw 
 where show_id='s5023';
 
 --handling foreign characters
+SELECT title
+FROM netflix_raw
+WHERE title LIKE '%?%'
 
 --remove duplicates 
+
+WITH CTE AS (
+    SELECT 
+        show_id, 
+        ROW_NUMBER() OVER (
+            PARTITION BY show_id 
+            ORDER BY show_id
+        ) AS row_num
+    FROM netflix_raw
+)
+DELETE FROM CTE 
+WHERE row_num > 1;
+
 select show_id,COUNT(*) 
 from netflix_raw
 group by show_id 
 having COUNT(*)>1
+
+
+
+
+select title,COUNT(*) 
+from netflix_raw
+group by title 
+having COUNT(*)>1
+
+select * from netflix_raw
+where title in (
+select title
+from netflix_raw
+group by title 
+having COUNT(*)>1
+)
+order by title
+
+
+
+
+select * from netflix_raw
+where upper(title)  in (
+select upper(title)
+from netflix_raw
+group by upper(title) ,type
+having COUNT(*)>1
+)
+order by title
 
 select * from netflix_raw
 where concat(upper(title),type)  in (
@@ -17,6 +79,112 @@ group by upper(title) ,type
 having COUNT(*)>1
 )
 order by title
+
+
+with cte as (
+select *
+, ROW_NUMBER() over(partition by title, type order by show_id) as rn
+from netflix_raw
+)
+
+select * from cte
+where rn=1
+
+select show_id, trim(value) as director
+into netflix_directors
+from netflix_raw
+cross apply string_split(director,',')
+
+select * from netflix_directors
+
+
+
+select show_id, trim(value) as listed_in
+into netflix_listed
+from netflix_raw
+cross apply string_split(listed_in,',')
+
+select * from netflix_listed
+
+select show_id, trim(value) as country
+into netflix_country
+from netflix_raw
+cross apply string_split(country,',')
+
+select * from netflix_country
+
+-- 1. Remove the mistaken table
+DROP TABLE IF EXISTS netflix_listed;
+
+-- 2. Create the correct table
+SELECT 
+    show_id, 
+    TRIM(value) AS genre
+INTO netflix_genre
+FROM netflix_raw
+CROSS APPLY STRING_SPLIT(listed_in, ',');
+select * from netflix_genre
+
+
+
+
+
+with cte as (
+select *
+, ROW_NUMBER() over(partition by title, type order by show_id) as rn
+from netflix_raw
+)
+
+select show_id, type, title, cast(date_added as date) as date_added, release_year
+, rating,case when duration is null then rating else duration end as duration,description
+into netflix_stg
+from cte
+--where rn=1 and date_added is null
+
+select * from netflix_raw
+where show_id='s1001'
+
+
+select show_id, country 
+from netflix_raw
+where director = 'Ahishor Solomon'
+
+select show_id, country 
+from netflix_raw
+where country is null
+
+
+
+insert into netflix_country
+select show_id, m.country 
+from netflix_raw nr
+inner join (select director, country
+from netflix_country nc
+inner join netflix_directors nd
+on nc.show_id = nd.show_id
+group by director, country 
+) m on nr.director=m.director
+where nr.country is null
+
+
+
+select director, country
+from netflix_country nc
+inner join netflix_directors nd
+on nc.show_id = nd.show_id
+group by director, country
+
+
+select * from netflix_raw where duration is null
+
+
+
+
+
+
+
+
+
 
 with cte as (
 select * 
@@ -81,16 +249,41 @@ select * from netflix_raw where duration is null
 
 /*1  for each director count the no of movies and tv shows created by them in separate columns 
 for directors who have created tv shows and movies both */
+
+--My Version
+select nd.director ,
+COUNT(distinct case when n.type = 'Movie' then n.show_id end) as no_of_movies
+,COUNT(distinct case when n.type = 'TV Show' then n.show_id end) as no_of_tvshow
+
+from netflix_stg n
+inner join netflix_directors nd 
+on n.[show_id] = nd.[show_id]
+group by nd.director
+having count(distinct n.[type]) > 1
+order by distinct_type desc
+
+--Old
 select nd.director 
 ,COUNT(distinct case when n.type='Movie' then n.show_id end) as no_of_movies
 ,COUNT(distinct case when n.type='TV Show' then n.show_id end) as no_of_tvshow
-from netflix n
+from netflix_stg n
 inner join netflix_directors nd on n.show_id=nd.show_id
 group by nd.director
 having COUNT(distinct n.type)>1
 
 
 --2 which country has highest number of comedy movies 
+--My Version
+select top 1 nc.country ,  COUNT(distinct ng.show_id ) as no_of_movies
+from netflix_genre ng
+inner join netflix_country nc on ng.show_id=nc.show_id
+inner join netflix_stg n on ng.show_id = nc.show_id
+where ng.genre='Comedies'and n.type='Movie'
+group by nc.country 
+order by no_of_movies desc
+
+select 
+
 select  top 1 nc.country , COUNT(distinct ng.show_id ) as no_of_movies
 from netflix_genre ng
 inner join netflix_country nc on ng.show_id=nc.show_id
@@ -101,6 +294,26 @@ order by no_of_movies desc
 
 
 --3 for each year (as per date added to netflix), which director has maximum number of movies released
+with cte as (
+select nd.director , YEAR(date_added) as date_year, COUNT(distinct n .show_id) as no_of_movies
+from netflix_stg n
+inner join netflix_directors  nd on n.show_id  = nd.show_id
+where type='Movie'
+group by nd.director , YEAR(date_added)
+)
+, cte2 as
+(select *
+,ROW_Number() over (partition by date_year order by  no_of_movies desc , director) as rn
+from cte
+--order by date_year , no_of_movies desc
+)
+select * from cte2 
+where rn=1
+
+
+
+
+
 with cte as (
 select nd.director,YEAR(date_added) as date_year,count(n.show_id) as no_of_movies
 from netflix n
@@ -119,6 +332,14 @@ select * from cte2 where rn=1
 
 
 --4 what is average duration of movies in each genre
+select ng.genre , avg(cast(REPLACE(duration,' min','') AS int)) as avg_duration
+from netflix_stg n
+inner join netflix_genre ng on n.show_id=ng.show_id
+where type='Movie'
+group by ng.genre
+
+
+
 select ng.genre , avg(cast(REPLACE(duration,' min','') AS int)) as avg_duration
 from netflix n
 inner join netflix_genre ng on n.show_id=ng.show_id
